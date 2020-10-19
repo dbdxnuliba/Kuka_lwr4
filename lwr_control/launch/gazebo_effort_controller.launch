@@ -1,0 +1,60 @@
+<?xml version="1.0" ?>
+
+<launch>
+
+  <!-- these are the arguments you can pass this launch file, for example paused:=true -->
+  <arg name="paused" default="true"/>
+  <arg name="use_sim_time" default="true"/>
+  <arg name="gui" default="true"/>
+  <arg name="headless" default="false"/>
+  <arg name="debug" default="false"/>
+  <arg name="hardware_interface" default="hardware_interface/EffortJointInterface"/>
+
+  <!-- We resume the logic in empty_world.launch, changing only the name of the world to be launched -->
+  <include file="$(find gazebo_ros)/launch/empty_world.launch">
+    <arg name="world_name" value="$(find lwr_control)/world/my_lwr_iiwa_object.world"/>
+    <arg name="debug" value="$(arg debug)" />
+    <arg name="gui" value="$(arg gui)" />
+    <arg name="paused" value="$(arg paused)"/>
+    <arg name="use_sim_time" value="$(arg use_sim_time)"/>
+    <arg name="headless" value="$(arg headless)"/>
+  </include>
+
+
+	<rosparam file="$(find lwr_control)/config/controllers.yaml" command="load"/>
+
+  <!-- Load the URDF with the given hardware interface into the ROS Parameter Server -->
+<!--
+  <param name="robot_description"
+    command="$(find xacro)/xacro '$(find single_lwr_robot)/robot/single_lwr_robot.urdf.xacro' hardware_interface:=$(arg hardware_interface)" />
+-->
+  <param name="robot_description"
+    command="$(find xacro)/xacro '$(find lwr_end_eff)/urdf/lwr_tool.urdf.xacro' hardware_interface:=$(arg hardware_interface)" />
+
+  <node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher">
+    <remap from="/joint_states" to="/lwr/joint_states" />
+  </node>
+
+  	<node name="controller_spawner" pkg="controller_manager" type="spawner" respawn="false" output="screen" ns="/lwr" args="
+  	  joint_state_controller
+  		JointEffortController_J1_controller
+  		JointEffortController_J2_controller
+  		JointEffortController_J3_controller
+  		JointEffortController_J4_controller
+  		JointEffortController_J5_controller
+  		JointEffortController_J6_controller
+  		JointEffortController_J7_controller
+  		"/>
+
+    <node name="urdf_spawner" pkg="gazebo_ros" type="spawn_model" respawn="false" output="screen"
+  	args="-urdf -model lwr -param robot_description
+    -J lwr_a1_joint 1.0
+    -J lwr_a2_joint 1.5
+    -J lwr_e1_joint 0.2
+    -J lwr_a3_joint 1.7
+    -J lwr_a4_joint 0.2
+    -J lwr_a5_joint 0.3
+    -J lwr_a6_joint 0.7 "/>
+
+
+</launch>

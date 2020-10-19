@@ -1,0 +1,32 @@
+lwr:
+  joint_state_controller:
+    type: joint_state_controller/JointStateController
+    publish_rate: 500
+  # MY Effort Controllers ---------------------------------------
+  JointEffortController_J1_controller:
+    type: effort_controllers/JointEffortController
+    joint: lwr_a1_joint
+
+  JointEffortController_J2_controller:
+    type: effort_controllers/JointEffortController
+    joint: lwr_a2_joint
+
+  JointEffortController_J3_controller:
+    type: effort_controllers/JointEffortController
+    joint: lwr_e1_joint
+
+  JointEffortController_J4_controller:
+    type: effort_controllers/JointEffortController
+    joint: lwr_a3_joint
+
+  JointEffortController_J5_controller:
+    type: effort_controllers/JointEffortController
+    joint: lwr_a4_joint
+
+  JointEffortController_J6_controller:
+    type: effort_controllers/JointEffortController
+    joint: lwr_a5_joint
+
+  JointEffortController_J7_controller:
+    type: effort_controllers/JointEffortController
+    joint: lwr_a6_joint
