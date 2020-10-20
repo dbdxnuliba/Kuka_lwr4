@@ -22,6 +22,97 @@
 
 using namespace std;
 
+class ETank {
+	public:
+		ETank(double Einit, double Emin, double Emax, double dt) {_Et=Einit;_Emin=Emin; _Emax=Emax; _xt=sqrt(2*_Et);_dt=dt;};
+		void update(const Eigen::VectorXd input, const Eigen::MatrixXd Kd, const Eigen::VectorXd x_dot, const Eigen::VectorXd Kpxtilde);
+		double getEt() {return _Et;};
+		double _alpha;
+	private:
+		double _Et, _Emin, _Emax, _xt;
+		double _beta;
+		double _dt;
+};
+
+void ETank::update(const Eigen::VectorXd input, const Eigen::MatrixXd Kd, const Eigen::VectorXd x_dot, const Eigen::VectorXd Kpxtilde) {
+	if(_Et<=_Emax) _beta=1;
+	else _beta=0;
+
+	double w = input.dot(Kpxtilde);
+
+	double f_energy = 0.5*( 1 - cos(M_PI*(_Et-_Emin)/(_Emax-_Emin)) );
+	double g_input;
+	if(w<=0) g_input=0;
+	else	g_input=1;
+
+	_alpha = f_energy*g_input + (1-g_input);
+
+	double gamma;
+	if( (_Et>=_Emin) && w>=0 ) gamma=_alpha;
+	else gamma=0;
+
+	w=gamma*w;
+
+	double eta=0.5;
+	double Diss = x_dot.transpose()*Kd*x_dot;
+
+	double ut = -(1.0/_xt)*w;
+	cout<<"Ut: "<<ut<<endl;
+	double xt_dot = (_beta*eta/_xt)*Diss + ut;
+	_xt += xt_dot*_dt;
+	_Et = 0.5*_xt*_xt;
+
+}
+
+class ETankGen {
+	public:
+		ETankGen(double Einit, double Emin, double Emax, double dt, int inputSize) {_Et=Einit;_Emin=Emin; _Emax=Emax; _xt=sqrt(2*_Et);_dt=dt;_alpha.resize(inputSize);};
+		void update(const std::vector<Eigen::VectorXd> inputs, const std::vector<double> dissInputs, const std::vector<Eigen::VectorXd> products);
+		double getEt() {return _Et;};
+		std::vector<double> _alpha;
+	private:
+		double _Et, _Emin, _Emax, _xt;
+		double _beta;
+		double _dt;
+};
+
+void ETankGen::update(const std::vector<Eigen::VectorXd> inputs, const std::vector<double> dissInputs, const std::vector<Eigen::VectorXd> products) {
+	if(_Et<=_Emax) _beta=1;
+	else _beta=0;
+
+	double f_energy = 0.5*( 1 - cos(M_PI*(_Et-_Emin)/(_Emax-_Emin)) );
+	double eta=0.5;
+	double Diss=0;
+	double wtot = 0;
+
+	for (int i=0; i<_alpha.size(); i++)
+		Diss+=dissInputs[i];
+
+	for (int i=0; i<_alpha.size(); i++) {
+		double w = inputs[i].dot(products[i]);
+		double g_input;
+		if(w<=0) g_input=0;
+		else	g_input=1;
+
+		_alpha[i] = f_energy*g_input + (1-g_input);
+		double gamma;
+		if( (_Et>=_Emin) && w>=0 ) gamma=_alpha[i];
+		else gamma=0;
+
+		wtot+=gamma*w;
+	}
+
+	double ut = -(1.0/_xt)*wtot;
+	cout<<"Ut: "<<ut<<endl;
+	double xt_dot = (_beta*eta/_xt)*Diss + ut;
+	_xt += xt_dot*_dt;
+	_Et = 0.5*_xt*_xt;
+	if(ut>0)
+		ROS_ERROR("Diss: %f\n",Diss);
+}
+
+
+
 class DERIV {
 	public:
 		DERIV(double freq=500,double gain=100) {_f=freq;_dt=1.0/_f;_integral=Eigen::VectorXd::Zero(6);_gain=gain;};
@@ -48,6 +139,7 @@ class KUKA_INVDYN {
 		void compute_force_errors(const Eigen::VectorXd h, const Eigen::VectorXd hdot, const Eigen::VectorXd mask);
 		void compute_errors(const geometry_msgs::PoseStamped& p_des, const geometry_msgs::TwistStamped& v_des, const geometry_msgs::AccelStamped& a_des);
 		void compute_compliantFrame(const geometry_msgs::PoseStamped& p_des, const geometry_msgs::TwistStamped& v_des, const geometry_msgs::AccelStamped& a_des);
+		void compute_compliantFrame(const geometry_msgs::PoseStamped& p_des, const geometry_msgs::TwistStamped& v_des, const geometry_msgs::AccelStamped& a_des, const std::vector<double> alpha);
 		bool newTrajectory(const std::vector<geometry_msgs::PoseStamped> waypoints, const std::vector<double> times);
 		bool newTrajectory(const std::vector<geometry_msgs::PoseStamped> waypoints, const std::vector<double> times, const Eigen::VectorXd xdi, const Eigen::VectorXd xdf, const Eigen::VectorXd xddi, const Eigen::VectorXd xddf);
 		bool newForceTrajectory(const std::vector<Eigen::VectorXd> waypoints, const std::vector<double> times, const Eigen::VectorXd mask);
@@ -315,6 +407,9 @@ void KUKA_INVDYN::ctrl_loop() {
 	double Kp = 700;
 	double Kd = 100;
 
+	//ETank tank(1.0,0.01,1.0,0.002);
+	ETankGen tankGen(2.0,0.01,2.0,0.002,2);
+
 	while( !_first_js ) usleep(0.1);
 
 	while( ros::ok() ) {
@@ -327,6 +422,23 @@ void KUKA_INVDYN::ctrl_loop() {
 			_newPosReady=true;
 		}
 		updatePose();
+
+		/*
+		Eigen::VectorXd desVelEigen, desAccEigen, complVelEigen;
+		twist2Vector(_desVel,desVelEigen);
+		accel2Vector(_desAcc,desAccEigen);
+		twist2Vector(_complVel,complVelEigen);
+		std::vector<Eigen::VectorXd> tankInputs, tankProds;
+		std::vector<double> tankDiss;
+		tankDiss.push_back(complVelEigen.transpose()*_Kdt*complVelEigen);
+		tankInputs.push_back(-desVelEigen);
+		tankProds.push_back(_Kpt*z_t);
+		tankInputs.push_back(_Mt*desAccEigen + _Kdt*desVelEigen);
+		tankProds.push_back(complVelEigen);
+		tankGen.update(tankInputs,tankDiss,tankProds);
+		cout<<tankGen.getEt()<<endl;
+		*/
+		//compute_compliantFrame(_desPose,_desVel,_desAcc,tankGen._alpha);
 		compute_compliantFrame(_desPose,_desVel,_desAcc);
 		compute_errors(_complPose,_complVel,_complAcc); //Calcolo errori spazio operativo
 
@@ -488,6 +600,39 @@ void KUKA_INVDYN::compute_errors(const geometry_msgs::PoseStamped& p_des, const 
 
 }
 
+void KUKA_INVDYN::compute_compliantFrame(const geometry_msgs::PoseStamped& p_des, const geometry_msgs::TwistStamped& v_des, const geometry_msgs::AccelStamped& a_des, const std::vector<double> alpha) {
+	geometry_msgs::TwistStamped vmod_des;
+	geometry_msgs::AccelStamped amod_des;
+
+	if (alpha.size()<2) {
+		vmod_des.twist.linear.x = alpha[0]*v_des.twist.linear.x;
+		vmod_des.twist.linear.y = alpha[0]*v_des.twist.linear.y;
+		vmod_des.twist.linear.z = alpha[0]*v_des.twist.linear.z;
+		vmod_des.twist.angular.x = alpha[0]*v_des.twist.angular.x;
+		vmod_des.twist.angular.y = alpha[0]*v_des.twist.angular.y;
+		vmod_des.twist.angular.z = alpha[0]*v_des.twist.angular.z;
+	}
+	else {
+		double alphaMin = min(alpha[0],alpha[1]);
+		vmod_des.twist.linear.x = alphaMin*v_des.twist.linear.x;
+		vmod_des.twist.linear.y = alphaMin*v_des.twist.linear.y;
+		vmod_des.twist.linear.z = alphaMin*v_des.twist.linear.z;
+		vmod_des.twist.angular.x = alphaMin*v_des.twist.angular.x;
+		vmod_des.twist.angular.y = alphaMin*v_des.twist.angular.y;
+		vmod_des.twist.angular.z = alphaMin*v_des.twist.angular.z;
+
+		amod_des.accel.linear.x = alpha[1]*a_des.accel.linear.x;
+		amod_des.accel.linear.y = alpha[1]*a_des.accel.linear.y;
+		amod_des.accel.linear.z = alpha[1]*a_des.accel.linear.z;
+		amod_des.accel.angular.x = alpha[1]*a_des.accel.angular.x;
+		amod_des.accel.angular.y = alpha[1]*a_des.accel.angular.y;
+		amod_des.accel.angular.z = alpha[1]*a_des.accel.angular.z;
+		cout<<"alpha2: "<<alpha[1]<<endl;
+	}
+
+	compute_compliantFrame(p_des,vmod_des,amod_des);
+}
+
 void KUKA_INVDYN::compute_compliantFrame(const geometry_msgs::PoseStamped& p_des, const geometry_msgs::TwistStamped& v_des, const geometry_msgs::AccelStamped& a_des) {
 
 	zDotDot_t = _Mt.inverse() * ( _extWrench - _Kdt*zDot_t - _Kpt*z_t);
@@ -548,11 +693,14 @@ void KUKA_INVDYN::compute_compliantFrame(const geometry_msgs::PoseStamped& p_des
 }
 
 void KUKA_INVDYN::updatePose() {
-	if(!_newPosReady) return;
+
+	if(!_newPosReady)
+		return;
 
 	_desPose=_nextdesPose;
 	_desVel = _nextdesVel;
 	_desAcc = _nextdesAcc;
+
 	_newPosReady = false;
 }
 
@@ -648,9 +796,12 @@ bool KUKA_INVDYN::newForceTrajectory(const std::vector<Eigen::VectorXd> waypoint
 void KUKA_INVDYN::compute_force_errors(const Eigen::VectorXd h, const Eigen::VectorXd hdot, const Eigen::VectorXd mask) {
 
 	Eigen::VectorXd vel(6),ht(6);
-	double Kh = 1.0;
+	double Kh = 10.0;
 
 	ht = _extWrench-h;
+	std_msgs::Float64 data;
+	data.data=ht(1);
+	_plannedwrench_pub.publish(data);
 	//cout<<"Error: "<<ht(1)<<" / "<<_extWrench(1)<<endl<<endl;
 	//cout<<ht(1)<<endl<<endl;
 	vel(0) = _desVel.twist.linear.x;
@@ -659,7 +810,6 @@ void KUKA_INVDYN::compute_force_errors(const Eigen::VectorXd h, const Eigen::Vec
 	vel(3) = _desVel.twist.angular.x;
 	vel(4) = _desVel.twist.angular.y;
 	vel(5) = _desVel.twist.angular.z;
-
 
 	xf_dotdot = -_Kdt.inverse()*( -_Kpt*(vel-xf_dot) - Kh*ht + hdot);
 	//xf_dotdot <<0,xf_dotdot(1),0,0,0,0;
@@ -713,6 +863,7 @@ void KUKA_INVDYN::compute_force_errors(const Eigen::VectorXd h, const Eigen::Vec
 	_nextdesPose.pose.orientation.z = xf(5);
 	_nextdesPose.pose.orientation.w = xf(6);
 
+	//xf_dot == Eigen::VectorXd::Zero(6);
 	_nextdesVel.twist.linear.x = xf_dot(0);
 	_nextdesVel.twist.linear.y = xf_dot(1);
 	_nextdesVel.twist.linear.z = xf_dot(2);

@@ -14,6 +14,8 @@ bool T_RPY(Eigen::Matrix3d &R, double phi, double theta, double psi);
 bool Tdot_RPY(Eigen::Matrix3d &R, double phi, double theta, double psi);
 Matrix3d Skew(Vector3d v);
 Vector3d Vee(Matrix3d S);
+void twist2Vector(const geometry_msgs::TwistStamped twist, VectorXd& vel);
+void accel2Vector(const geometry_msgs::AccelStamped acc, VectorXd& a);
 
 class SPLINE_PLANNER {
 	public:

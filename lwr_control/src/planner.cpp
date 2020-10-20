@@ -1,5 +1,7 @@
 #include "../include/lwr_control/planner.h"
 
+//UTILS
+
 bool T_RPY(Eigen::Matrix3d &R, double phi, double theta, double psi) {
   R << 0, -sin(phi), cos(phi)*cos(theta),
        0, cos(phi), sin(phi)*cos(theta),
@@ -33,6 +35,28 @@ Vector3d Vee(Matrix3d S) {
   //cout<<S<<endl;
   return v;
 }
+
+void twist2Vector(const geometry_msgs::TwistStamped twist, VectorXd& vel) {
+  vel.resize(6);
+  vel(0) = twist.twist.linear.x;
+	vel(1) = twist.twist.linear.y;
+	vel(2) = twist.twist.linear.z;
+	vel(3) = twist.twist.angular.x;
+	vel(4) = twist.twist.angular.y;
+	vel(5) = twist.twist.angular.z;
+}
+
+void accel2Vector(const geometry_msgs::AccelStamped acc, VectorXd& a) {
+  a.resize(6);
+  a(0) = acc.accel.linear.x;
+	a(1) = acc.accel.linear.y;
+	a(2) = acc.accel.linear.z;
+	a(3) = acc.accel.angular.x;
+	a(4) = acc.accel.angular.y;
+	a(5) = acc.accel.angular.z;
+}
+
+//END UTILS
 
 SPLINE_PLANNER::SPLINE_PLANNER(double freq) {
   _freq = freq;
