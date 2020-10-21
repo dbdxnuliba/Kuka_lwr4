@@ -81,7 +81,7 @@ void ETankGen::update(const std::vector<Eigen::VectorXd> inputs, const std::vect
 	else _beta=0;
 
 	double f_energy = 0.5*( 1 - cos(M_PI*(_Et-_Emin)/(_Emax-_Emin)) );
-	double eta=0.5;
+	double eta=0.8;
 	double Diss=0;
 	double wtot = 0;
 
@@ -99,16 +99,16 @@ void ETankGen::update(const std::vector<Eigen::VectorXd> inputs, const std::vect
 		if( (_Et>=_Emin) && w>=0 ) gamma=_alpha[i];
 		else gamma=0;
 
+		//if(i==1) cout<<"Power: "<<gamma*w<<endl;
+
 		wtot+=gamma*w;
 	}
 
 	double ut = -(1.0/_xt)*wtot;
-	cout<<"Ut: "<<ut<<endl;
 	double xt_dot = (_beta*eta/_xt)*Diss + ut;
 	_xt += xt_dot*_dt;
+	if (_xt>sqrt(_Emax*2)) _xt=sqrt(_Emax*2);
 	_Et = 0.5*_xt*_xt;
-	if(ut>0)
-		ROS_ERROR("Diss: %f\n",Diss);
 }
 
 
@@ -128,7 +128,7 @@ class DERIV {
 
 class KUKA_INVDYN {
 	public:
-		KUKA_INVDYN();
+		KUKA_INVDYN(double sampleTime);
 		void run();
 		bool init_robot_model();
 		void get_dirkin();
@@ -209,6 +209,7 @@ class KUKA_INVDYN {
 		Eigen::VectorXd xf,xf_dot,xf_dotdot;
 		Eigen::VectorXd _h_des,_hdot_des, _nexth_des,_nexthdot_des, _forceMask;
 		DERIV numericAcc;
+		double _sTime,_freq;
 };
 
 
@@ -245,7 +246,10 @@ bool KUKA_INVDYN::init_robot_model() {
 	return true;
 }
 
-KUKA_INVDYN::KUKA_INVDYN() {
+KUKA_INVDYN::KUKA_INVDYN(double sampleTime) {
+
+	_sTime=sampleTime;
+	_freq = 1.0/_sTime;
 
 	if (!init_robot_model()) exit(1);
 	ROS_INFO("Robot tree correctly loaded from parameter server!");
@@ -403,12 +407,12 @@ void KUKA_INVDYN::ctrl_loop() {
   KDL::JntSpaceInertiaMatrix jsim_;
   jsim_.resize(_k_chain.getNrOfJoints());
 
-	ros::Rate r(500);
+	ros::Rate r(_freq);
 	double Kp = 700;
 	double Kd = 100;
 
-	//ETank tank(1.0,0.01,1.0,0.002);
-	ETankGen tankGen(2.0,0.01,2.0,0.002,2);
+	//ETank tank(1.0,0.01,1.0,_sTime);
+	ETankGen tankGen(3.0,0.01,3.0,_sTime,2);
 
 	while( !_first_js ) usleep(0.1);
 
@@ -423,7 +427,7 @@ void KUKA_INVDYN::ctrl_loop() {
 		}
 		updatePose();
 
-		/*
+
 		Eigen::VectorXd desVelEigen, desAccEigen, complVelEigen;
 		twist2Vector(_desVel,desVelEigen);
 		accel2Vector(_desAcc,desAccEigen);
@@ -436,9 +440,10 @@ void KUKA_INVDYN::ctrl_loop() {
 		tankInputs.push_back(_Mt*desAccEigen + _Kdt*desVelEigen);
 		tankProds.push_back(complVelEigen);
 		tankGen.update(tankInputs,tankDiss,tankProds);
-		cout<<tankGen.getEt()<<endl;
-		*/
+		//cout<<tankGen.getEt()<<endl;
+
 		//compute_compliantFrame(_desPose,_desVel,_desAcc,tankGen._alpha);
+
 		compute_compliantFrame(_desPose,_desVel,_desAcc);
 		compute_errors(_complPose,_complVel,_complAcc); //Calcolo errori spazio operativo
 
@@ -526,7 +531,7 @@ void KUKA_INVDYN::get_dirkin() {
 	_JDot = JacDot.data;
 /*	for(int i=0; i<6;i++)
 		for(int j=0; j<7; j++) {
-			_JDot(i,j) = (_J(i,j)-_Jold(i,j))*500;
+			_JDot(i,j) = (_J(i,j)-_Jold(i,j))*_freq;
 		} */
 
 	Eigen::VectorXd vel(6);
@@ -613,7 +618,7 @@ void KUKA_INVDYN::compute_compliantFrame(const geometry_msgs::PoseStamped& p_des
 		vmod_des.twist.angular.z = alpha[0]*v_des.twist.angular.z;
 	}
 	else {
-		double alphaMin = min(alpha[0],alpha[1]);
+		double alphaMin = alpha[0]*alpha[1];//min(alpha[0],alpha[1]);
 		vmod_des.twist.linear.x = alphaMin*v_des.twist.linear.x;
 		vmod_des.twist.linear.y = alphaMin*v_des.twist.linear.y;
 		vmod_des.twist.linear.z = alphaMin*v_des.twist.linear.z;
@@ -636,8 +641,8 @@ void KUKA_INVDYN::compute_compliantFrame(const geometry_msgs::PoseStamped& p_des
 void KUKA_INVDYN::compute_compliantFrame(const geometry_msgs::PoseStamped& p_des, const geometry_msgs::TwistStamped& v_des, const geometry_msgs::AccelStamped& a_des) {
 
 	zDotDot_t = _Mt.inverse() * ( _extWrench - _Kdt*zDot_t - _Kpt*z_t);
-	zDot_t += zDotDot_t*0.002;
-	z_t += zDot_t*0.002;
+	zDot_t += zDotDot_t*_sTime;
+	z_t += zDot_t*_sTime;
 
 	_complAcc.accel.linear.x = a_des.accel.linear.x + zDotDot_t(0);
 	_complAcc.accel.linear.y = a_des.accel.linear.y + zDotDot_t(1);
@@ -716,7 +721,7 @@ bool KUKA_INVDYN::newTrajectory(const std::vector<geometry_msgs::PoseStamped> wa
 	if(!_trajEnd) return false;
 
 	_trajEnd=false;
-	CARTESIAN_PLANNER	cplanner(500);
+	CARTESIAN_PLANNER	cplanner(_freq);
 	cplanner.set_waypoints(waypoints,times,xdi,xdf,xddi,xddf);
 	cplanner.compute();
 
@@ -747,7 +752,7 @@ bool KUKA_INVDYN::newForceTrajectory(const std::vector<Eigen::VectorXd> waypoint
 	SPLINE_PLANNER* w[6];
 
 	for(int i=0; i<6; i++) {
-		w[i] = new SPLINE_PLANNER(500);
+		w[i] = new SPLINE_PLANNER(_freq);
 		std::vector<double> componentPoints;
 		for(int j=0; j<waypoints.size(); j++) {
 			componentPoints.push_back(waypoints[j](i));
@@ -795,33 +800,40 @@ bool KUKA_INVDYN::newForceTrajectory(const std::vector<Eigen::VectorXd> waypoint
 
 void KUKA_INVDYN::compute_force_errors(const Eigen::VectorXd h, const Eigen::VectorXd hdot, const Eigen::VectorXd mask) {
 
-	Eigen::VectorXd vel(6),ht(6);
-	double Kh = 10.0;
+	Eigen::VectorXd vel(6),acc(6),ht(6);
+	double Kh = 5.0;
 
 	ht = _extWrench-h;
 	std_msgs::Float64 data;
 	data.data=ht(1);
 	_plannedwrench_pub.publish(data);
-	//cout<<"Error: "<<ht(1)<<" / "<<_extWrench(1)<<endl<<endl;
+	cout<<"Error: "<<ht(1)<<" / "<<_extWrench(1)<<endl<<endl;
 	//cout<<ht(1)<<endl<<endl;
-	vel(0) = _desVel.twist.linear.x;
-	vel(1) = _desVel.twist.linear.y;
-	vel(2) = _desVel.twist.linear.z;
-	vel(3) = _desVel.twist.angular.x;
-	vel(4) = _desVel.twist.angular.y;
-	vel(5) = _desVel.twist.angular.z;
+	vel(0) = _complVel.twist.linear.x;
+	vel(1) = _complVel.twist.linear.y;
+	vel(2) = _complVel.twist.linear.z;
+	vel(3) = _complVel.twist.angular.x;
+	vel(4) = _complVel.twist.angular.y;
+	vel(5) = _complVel.twist.angular.z;
+
+	acc(0) = _complAcc.accel.linear.x;
+	acc(1) = _complAcc.accel.linear.y;
+	acc(2) = _complAcc.accel.linear.z;
+	acc(3) = _complAcc.accel.angular.x;
+	acc(4) = _complAcc.accel.angular.y;
+	acc(5) = _complAcc.accel.angular.z;
 
 	xf_dotdot = -_Kdt.inverse()*( -_Kpt*(vel-xf_dot) - Kh*ht + hdot);
 	//xf_dotdot <<0,xf_dotdot(1),0,0,0,0;
 	for (int i=0; i<6;i++) {
 		if(mask(i)!=0)
-			xf_dot(i) += xf_dotdot(i)*0.002;
+			xf_dot(i) += xf_dotdot(i)*_sTime;
 		else
 			xf_dotdot(i) = 0.0;
 	}
 	for (int i=0; i<3;i++) {
 		if(mask(i)!=0)
-			xf(i) += xf_dot(i)*0.002;
+			xf(i) += xf_dot(i)*_sTime;
 	}
 
 	if((mask(3)!=0)||(mask(4)!=0)||(mask(5)!=0)) {
@@ -837,8 +849,8 @@ void KUKA_INVDYN::compute_force_errors(const Eigen::VectorXd h, const Eigen::Vec
 		double eta_dot = -0.5*eps.transpose()*wdes;
 		Eigen::Vector3d eps_dot = 0.5*(eta*Eigen::Matrix3d::Identity() - Skew(eps))*wdes;
 
-		eta += eta_dot*0.002;
-		eps += eps_dot*0.002;
+		eta += eta_dot*_sTime;
+		eps += eps_dot*_sTime;
 
 		if(eta>1) eta=1;
 		else if (eta<-1) eta=-1;
@@ -892,7 +904,7 @@ int main(int argc, char** argv) {
 	ros::AsyncSpinner spinner(1); // Use 1 thread
 	spinner.start();
 
-	KUKA_INVDYN lwr;
+	KUKA_INVDYN lwr(0.002);
 	lwr.run();
 
 	geometry_msgs::PoseStamped pose;
