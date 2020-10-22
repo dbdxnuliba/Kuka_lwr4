@@ -12,6 +12,10 @@ find_package(Eigen3 REQUIRED)
 include_directories(${Eigen_INCLUDE_DIRS})
 
 find_package(catkin REQUIRED COMPONENTS
+  message_generation
+  nav_msgs
+  geometry_msgs
+  actionlib_msgs
   roscpp
   std_msgs
   tf
@@ -67,17 +71,20 @@ find_package(catkin REQUIRED COMPONENTS
 # )
 
 ## Generate actions in the 'action' folder
-# add_action_files(
-#   FILES
-#   Action1.action
+ add_action_files(
+  DIRECTORY action
+  FILES waypoints.action
 #   Action2.action
-# )
+ )
 
 ## Generate added messages and services with any dependencies listed here
-# generate_messages(
-#   DEPENDENCIES
-#   std_msgs
-# )
+ generate_messages(
+   DEPENDENCIES
+   std_msgs
+   nav_msgs
+   geometry_msgs
+   actionlib_msgs
+ )
 
 ################################################
 ## Declare ROS dynamic reconfigure parameters ##
@@ -113,6 +120,7 @@ catkin_package(
 #  LIBRARIES lwr_control
 #  CATKIN_DEPENDS iiwa_ros ros_cpp std_msgs
 #  DEPENDS system_lib
+   CATKIN_DEPENDS actionlib_msgs
 )
 
 ###########
@@ -151,6 +159,9 @@ target_link_libraries ( lwr_opSpace_controller ${catkin_LIBRARIES})
 
 add_executable( lwr_admittance_controller src/admittanceController.cpp src/planner.cpp)
 target_link_libraries ( lwr_admittance_controller ${catkin_LIBRARIES})
+
+add_executable( aClient src/trajectoryActionClient.cpp)
+target_link_libraries ( aClient ${catkin_LIBRARIES})
 
 ## Rename C++ executable without prefix
 ## The above recommended prefix causes long target names, the following renames the

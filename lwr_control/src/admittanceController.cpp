@@ -7,6 +7,7 @@
 #include "gazebo_msgs/ContactsState.h"
 #include <std_msgs/Float64.h>
 #include <std_msgs/Float64MultiArray.h>
+#include <geometry_msgs/WrenchStamped.h>
 
 #include <kdl_parser/kdl_parser.hpp>
 #include <kdl/chainfksolvervel_recursive.hpp>
@@ -19,6 +20,8 @@
 #include <kdl/chaindynparam.hpp>
 
 #include "../include/lwr_control/planner.h"
+#include <lwr_control/waypointsAction.h>
+#include <actionlib/server/simple_action_server.h>
 
 using namespace std;
 
@@ -148,6 +151,7 @@ class KUKA_INVDYN {
 		bool getWrench(Eigen::VectorXd& _wrench);
 		bool robotReady() {return _first_fk;};
 		void exitForceControl() {_fControl=false;};
+		void actionCB(const lwr_control::waypointsGoalConstPtr &goal);
 	private:
 		void updatePose();
 		void updateForce();
@@ -165,7 +169,7 @@ class KUKA_INVDYN {
 
 		ros::Subscriber _js_sub;
 		ros::Subscriber _wrench_sub;
-		ros::Publisher _cartpose_pub;
+		ros::Publisher _cartpose_pub, _desPose_pub, _extWrench_pub;
 		ros::Publisher _plannedpose_pub,_plannedtwist_pub,_plannedacc_pub,_plannedwrench_pub;
 		KDL::JntArray *_initial_q;
 		KDL::JntArray *_q_in;
@@ -210,6 +214,9 @@ class KUKA_INVDYN {
 		Eigen::VectorXd _h_des,_hdot_des, _nexth_des,_nexthdot_des, _forceMask;
 		DERIV numericAcc;
 		double _sTime,_freq;
+		actionlib::SimpleActionServer<lwr_control::waypointsAction> _lwrActionServer;
+		lwr_control::waypointsFeedback _actionFeedback;
+  	lwr_control::waypointsResult _actionResult;
 };
 
 
@@ -246,7 +253,8 @@ bool KUKA_INVDYN::init_robot_model() {
 	return true;
 }
 
-KUKA_INVDYN::KUKA_INVDYN(double sampleTime) {
+KUKA_INVDYN::KUKA_INVDYN(double sampleTime) :
+    _lwrActionServer(_nh, "lwrActionServer", boost::bind(&KUKA_INVDYN::actionCB, this, _1), false) {
 
 	_sTime=sampleTime;
 	_freq = 1.0/_sTime;
@@ -256,6 +264,7 @@ KUKA_INVDYN::KUKA_INVDYN(double sampleTime) {
 
 	cout << "Joints and segments: " << iiwa_tree.getNrOfJoints() << " - " << iiwa_tree.getNrOfSegments() << endl;
 
+
 	_js_sub = _nh.subscribe("/lwr/joint_states", 0, &KUKA_INVDYN::joint_states_cb, this);
 	_wrench_sub = _nh.subscribe("/tool_contact_sensor_state", 0, &KUKA_INVDYN::interaction_wrench_cb, this);
 
@@ -264,6 +273,8 @@ KUKA_INVDYN::KUKA_INVDYN(double sampleTime) {
 	_plannedtwist_pub = _nh.advertise<geometry_msgs::TwistStamped>("/lwr/planned_twist", 0);
 	_plannedacc_pub = _nh.advertise<geometry_msgs::AccelStamped>("/lwr/planned_acc", 0);
 	_plannedwrench_pub = _nh.advertise<std_msgs::Float64>("/lwr/planned_wrench", 0);
+	_desPose_pub = _nh.advertise<geometry_msgs::PoseStamped>("/lwr/eef_des_pose", 0);
+	_extWrench_pub = _nh.advertise<geometry_msgs::WrenchStamped>("/lwr/eef_ext_wrench", 0);
 
 	_cmd_pub[0] = _nh.advertise< std_msgs::Float64 > ("/lwr/JointEffortController_J1_controller/command", 0);
 	_cmd_pub[1] = _nh.advertise< std_msgs::Float64 > ("/lwr/JointEffortController_J2_controller/command", 0);
@@ -309,6 +320,8 @@ KUKA_INVDYN::KUKA_INVDYN(double sampleTime) {
 	_fControl = false;
 	_trajEnd = true;
 	_newPosReady = false;
+
+	_lwrActionServer.start();
 }
 
 bool KUKA_INVDYN::getPose(geometry_msgs::PoseStamped& p_des) {
@@ -355,9 +368,17 @@ void KUKA_INVDYN::interaction_wrench_cb(const gazebo_msgs::ContactsStateConstPtr
 		tf::matrixTFToEigen(Re_tf,Re);
 		_extWrench.head(3) = Re*_extWrench.head(3);
 		_extWrench.tail(3) = Re*_extWrench.tail(3);
+		geometry_msgs::WrenchStamped wrenchstamp;
+		wrenchstamp.wrench.force.x = _extWrench(0);
+		wrenchstamp.wrench.force.y = _extWrench(1);
+		wrenchstamp.wrench.force.z = _extWrench(2);
+		wrenchstamp.wrench.torque.x = _extWrench(3);
+		wrenchstamp.wrench.torque.y = _extWrench(4);
+		wrenchstamp.wrench.torque.z = _extWrench(5);
+		_extWrench_pub.publish(wrenchstamp);
 		//cout<<_extWrench<<endl<<endl;
 	}
-//cout<<_extWrench<<endl<<endl;
+
 }
 
 void KUKA_INVDYN::joint_states_cb( sensor_msgs::JointState js ) {
@@ -444,6 +465,7 @@ void KUKA_INVDYN::ctrl_loop() {
 
 		//compute_compliantFrame(_desPose,_desVel,_desAcc,tankGen._alpha);
 
+		_desPose_pub.publish(_desPose);
 		compute_compliantFrame(_desPose,_desVel,_desAcc);
 		compute_errors(_complPose,_complVel,_complAcc); //Calcolo errori spazio operativo
 
@@ -725,12 +747,30 @@ bool KUKA_INVDYN::newTrajectory(const std::vector<geometry_msgs::PoseStamped> wa
 	cplanner.set_waypoints(waypoints,times,xdi,xdf,xddi,xddf);
 	cplanner.compute();
 
+	int trajsize = cplanner._x.size();
+	int trajpoint = 0;
+	double status = 0;
+
 	_fControl = false;
 
 	while(cplanner.isReady() && ros::ok()) {
 		while(_newPosReady && ros::ok()) usleep(1);
 		cplanner.getNext(_nextdesPose,_nextdesVel,_nextdesAcc);
 		_newPosReady=true;
+		trajpoint++;
+		status = 100.0*((double)(trajpoint))/trajsize;
+		if(_lwrActionServer.isActive()) {
+			_actionFeedback.completePerc=status;
+			_lwrActionServer.publishFeedback(_actionFeedback);
+			if (_lwrActionServer.isPreemptRequested())
+      {
+        ROS_INFO("ACTION Preempted");
+        // set the action state to preempted
+        _lwrActionServer.setPreempted();
+				_trajEnd=true;
+        return false;
+      }
+		}
 	}
 
 	_trajEnd=true;
@@ -777,6 +817,10 @@ bool KUKA_INVDYN::newForceTrajectory(const std::vector<Eigen::VectorXd> waypoint
 
 	_fControl=true;
 
+	int trajsize = w[0]->_x.size();
+	int trajpoint = 0;
+	double status = 0;
+
 	while(w[0]->isReady() && ros::ok()) {
 		Eigen::VectorXd h(6), hdot(6);
 		for(int i=0; i<6; i++) {
@@ -789,6 +833,20 @@ bool KUKA_INVDYN::newForceTrajectory(const std::vector<Eigen::VectorXd> waypoint
 		_nexth_des=h;
 		_nexthdot_des=hdot;
 		_newPosReady=true;
+		trajpoint++;
+		status = 100.0*((double)(trajpoint))/trajsize;
+		if(_lwrActionServer.isActive()) {
+			_actionFeedback.completePerc=status;
+			_lwrActionServer.publishFeedback(_actionFeedback);
+			if (_lwrActionServer.isPreemptRequested())
+      {
+        ROS_INFO("ACTION Preempted");
+        // set the action state to preempted
+        _lwrActionServer.setPreempted();
+				_trajEnd=true;
+        return false;
+      }
+		}
 	}
 
 	for(int i=0; i<6; i++)
@@ -897,6 +955,47 @@ void KUKA_INVDYN::run() {
 	//ros::spin();
 }
 
+void KUKA_INVDYN::actionCB(const lwr_control::waypointsGoalConstPtr &goal) {
+	bool result;
+	if(goal->poseOrForce) {
+		std::vector<geometry_msgs::PoseStamped> waypoints = goal->waypoints.poses;
+		std::vector<double> times = goal->times;
+		Eigen::VectorXd xdi,xdf,xddi,xddf;
+
+		twist2Vector(goal->initVel,xdi);
+		twist2Vector(goal->finalVel,xdf);
+		accel2Vector(goal->initAcc,xddi);
+		accel2Vector(goal->finalAcc,xddf);
+
+		result = newTrajectory(waypoints,times,xdi,xdf,xddi,xddf);
+	} else {
+		std::vector<Eigen::VectorXd> waypoints;
+		std::vector<double> times = goal->times;
+		Eigen::VectorXd initWrench(6),finalWrench(6), mask(6);
+
+		wrench2Vector(goal->initWrench,initWrench);
+		wrench2Vector(goal->finalWrench,finalWrench);
+		wrench2Vector(goal->mask,mask);
+
+		waypoints.push_back(initWrench);
+		waypoints.push_back(finalWrench);
+
+		result = newForceTrajectory(waypoints,times,mask);
+	}
+
+	if(result) {
+      _actionResult.ok = true;
+      ROS_INFO("ACTION: Succeeded");
+      // set the action state to succeeded
+      _lwrActionServer.setSucceeded(_actionResult);
+  } else {
+		_actionResult.ok = false;
+		ROS_INFO("ACTION: Aborted. Probably already following another trajectory.");
+		// set the action state to succeeded
+		_lwrActionServer.setAborted(_actionResult);
+	}
+}
+
 
 int main(int argc, char** argv) {
 	ros::init(argc, argv, "iiwa_kdl");
@@ -906,7 +1005,7 @@ int main(int argc, char** argv) {
 
 	KUKA_INVDYN lwr(0.002);
 	lwr.run();
-
+/*
 	geometry_msgs::PoseStamped pose;
 	while(!lwr.getPose(pose) && ros::ok()) sleep(2);
 
@@ -923,10 +1022,6 @@ int main(int argc, char** argv) {
 	p.pose.position.x = 0;
 	p.pose.position.y -= 0.47;
 	p.pose.position.z -= 0.3;
-	/*p.pose.orientation.z = qorient.z();
-	p.pose.orientation.w = qorient.w();
-	p.pose.orientation.x = qorient.x();
-	p.pose.orientation.y = qorient.y();*/
 	p.pose.orientation.z = -0.5;
 	p.pose.orientation.w = 0.5;
 	p.pose.orientation.x = -0.5;
@@ -954,6 +1049,7 @@ int main(int argc, char** argv) {
 	lwr.newForceTrajectory(force_wp,times,mask);
 
 	cout<<"Force control complete!"<<endl<<endl;
+	sleep(10);
 	lwr.exitForceControl();
 
 	waypoints.clear(); times.clear();
@@ -964,6 +1060,7 @@ int main(int argc, char** argv) {
 	lwr.newTrajectory(waypoints,times); //Compute new trajectory
 	cout<<"Trajectory complete!"<<endl<<endl;
 
+*/
 	ros::waitForShutdown();
 
 	return 0;

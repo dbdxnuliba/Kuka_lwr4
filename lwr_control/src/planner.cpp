@@ -56,6 +56,16 @@ void accel2Vector(const geometry_msgs::AccelStamped acc, VectorXd& a) {
 	a(5) = acc.accel.angular.z;
 }
 
+void wrench2Vector(const geometry_msgs::WrenchStamped wrench, VectorXd& w) {
+  w.resize(6);
+  w(0) = wrench.wrench.force.x;
+	w(1) = wrench.wrench.force.y;
+	w(2) = wrench.wrench.force.z;
+	w(3) = wrench.wrench.torque.x;
+	w(4) = wrench.wrench.torque.y;
+	w(5) = wrench.wrench.torque.z;
+}
+
 //END UTILS
 
 SPLINE_PLANNER::SPLINE_PLANNER(double freq) {

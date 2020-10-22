@@ -4,6 +4,7 @@
 #include "geometry_msgs/PoseStamped.h"
 #include "geometry_msgs/TwistStamped.h"
 #include "geometry_msgs/AccelStamped.h"
+#include <geometry_msgs/WrenchStamped.h>
 #include <tf/tf.h>
 #include <tf_conversions/tf_eigen.h>
 
@@ -16,6 +17,7 @@ Matrix3d Skew(Vector3d v);
 Vector3d Vee(Matrix3d S);
 void twist2Vector(const geometry_msgs::TwistStamped twist, VectorXd& vel);
 void accel2Vector(const geometry_msgs::AccelStamped acc, VectorXd& a);
+void wrench2Vector(const geometry_msgs::WrenchStamped wrench, VectorXd& w);
 
 class SPLINE_PLANNER {
 	public:
